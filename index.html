@@ -174,6 +174,10 @@ function Audite() {
   const [addBusy, setAddBusy] = useState(false);
   const [addMsg, setAddMsg] = useState("");
 
+  const [sugList, setSugList] = useState([]);    // suggested playlist (queue-item shape + pubDate)
+  const [sugLoading, setSugLoading] = useState(false);
+  const [sugBuilt, setSugBuilt] = useState(false);
+
   const [current, setCurrent] = useState(null);  // same shape as queue item
   const [playing, setPlaying] = useState(false);
   const [curTime, setCurTime] = useState(0);
@@ -183,10 +187,13 @@ function Audite() {
 
   const audioRef = useRef(null);
   const lastSaveRef = useRef(0);
+  const fileInputRef = useRef(null);
+  const playSrcRef = useRef("queue");            // which list auto-advance follows: queue | suggested
   const queueRef = useRef(queue);
   const positionsRef = useRef(positions);
   const currentRef = useRef(current);
-  queueRef.current = queue; positionsRef.current = positions; currentRef.current = current;
+  const sugListRef = useRef(sugList);
+  queueRef.current = queue; positionsRef.current = positions; currentRef.current = current; sugListRef.current = sugList;
 
   // ---------- initial load ----------
   useEffect(() => {
@@ -223,7 +230,8 @@ function Audite() {
   }, []);
 
   // ---------- playback ----------
-  const playItem = useCallback((item) => {
+  const playItem = useCallback((item, source = "queue") => {
+    playSrcRef.current = source;
     const a = audioRef.current;
     if (!a) return;
     setCurrent(item);
@@ -305,6 +313,17 @@ function Audite() {
       const cur = currentRef.current;
       const q = queueRef.current;
       if (cur) savePosition(cur, 0, a.duration || 0, true);
+      // advance through the Suggested list without touching the manual queue
+      if (playSrcRef.current === "suggested") {
+        const list = sugListRef.current;
+        const idx = list.findIndex((it) => it.audioUrl === cur?.audioUrl);
+        for (let i = idx + 1; i < list.length; i++) {
+          const p = positionsRef.current[list[i].audioUrl];
+          if (!p?.done) { playItem(list[i], "suggested"); return; }
+        }
+        setPlaying(false);
+        return;
+      }
       // advance through the queue
       let nextIdx = 0;
       const curIdx = q.findIndex((it) => it.audioUrl === cur?.audioUrl);
@@ -332,7 +351,7 @@ function Audite() {
       const { text: xml, finalUrl } = await fetchText(feedUrl);
       const feed = parseFeed(xml, finalUrl);
       // if only the unwrapped URL worked, save that so refreshes skip the broken wrapper
-      const entry = { id: uid(), title: feed.title, artwork: feed.artwork, feedUrl: finalUrl, folderId: null, author: feed.author, showOnMain: false };
+      const entry = { id: uid(), title: feed.title, artwork: feed.artwork, feedUrl: finalUrl, folderId: null, author: feed.author, showOnMain: false, inSuggested: false };
       const next = [...pods, entry];
       setPods(next); saveLibrary(next, folders);
       setAddMsg(`Added: ${feed.title}`);
@@ -361,6 +380,13 @@ function Audite() {
     const next = pods.map((p) => (p.id === podId ? { ...p, showOnMain: !p.showOnMain } : p));
     setPods(next); saveLibrary(next, folders);
     if (openPodMeta && openPodMeta.id === podId) setOpenPodMeta({ ...openPodMeta, showOnMain: !openPodMeta.showOnMain });
+  };
+
+  const toggleInSuggested = (podId) => {
+    const next = pods.map((p) => (p.id === podId ? { ...p, inSuggested: !p.inSuggested } : p));
+    setPods(next); saveLibrary(next, folders);
+    if (openPodMeta && openPodMeta.id === podId) setOpenPodMeta({ ...openPodMeta, inSuggested: !openPodMeta.inSuggested });
+    setSugBuilt(false); // membership changed — rebuild next time Suggested opens
   };
 
   const addFolder = () => {
@@ -408,6 +434,77 @@ function Audite() {
     const q = [...queue];
     [q[idx], q[j]] = [q[j], q[idx]];
     saveQueue(q);
+  };
+
+  // ---------- suggested ----------
+  const buildSuggested = useCallback(async () => {
+    setSugLoading(true);
+    const shows = pods.filter((p) => p.inSuggested);
+    const results = await Promise.allSettled(shows.map(async (p) => {
+      const { text } = await fetchText(p.feedUrl);
+      return parseFeed(text, p.feedUrl);
+    }));
+    const items = [];
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue; // a broken feed never blocks the list
+      const feed = r.value;
+      for (const ep of feed.episodes.slice(0, 3)) {
+        if (positionsRef.current[ep.audioUrl]?.done) continue;
+        items.push({ ...epToItem(ep, feed), pubDate: ep.pubDate });
+      }
+    }
+    items.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
+    setSugList(items); setSugBuilt(true); setSugLoading(false);
+  }, [pods]);
+
+  useEffect(() => {
+    if (view === "suggested" && !sugBuilt && !sugLoading) buildSuggested();
+  }, [view, sugBuilt, sugLoading, buildSuggested]);
+
+  // ---------- backup / restore ----------
+  const exportBackup = async () => {
+    const data = {
+      library: await sGet("library", { podcasts: [], folders: [] }),
+      queue: await sGet("queue", []),
+      positions: await sGet("positions", {}),
+      settings: await sGet("settings", { speed: 1 }),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const d = new Date();
+    a.download = `audite-backup-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const importBackup = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data.library || !Array.isArray(data.library.podcasts)) throw new Error("not a backup");
+        if (!confirm("Import this backup? It replaces your current library, queue, and listening positions.")) return;
+        sSet("library", data.library);
+        sSet("queue", data.queue || []);
+        sSet("positions", data.positions || {});
+        sSet("settings", data.settings || { speed: 1 });
+        setPods(data.library.podcasts || []); setFolders(data.library.folders || []);
+        setQueue(data.queue || []); setPositions(data.positions || {});
+        const sp = (data.settings && data.settings.speed) || 1;
+        setSpeed(sp);
+        if (audioRef.current) audioRef.current.playbackRate = sp;
+        setSugList([]); setSugBuilt(false);
+        setAddMsg("");
+        showToast("Backup imported");
+      } catch {
+        setAddMsg("Couldn't import — that file doesn't look like an Audite backup.");
+      }
+    };
+    reader.readAsText(file);
   };
 
   // ---------- search ----------
@@ -544,6 +641,7 @@ function Audite() {
       {view !== "podcast" && (
         <div className="tabs">
           <button className={`tab ${view === "library" ? "on" : ""}`} onClick={() => setView("library")}>Library</button>
+          <button className={`tab ${view === "suggested" ? "on" : ""}`} onClick={() => setView("suggested")}>Suggested</button>
           <button className={`tab ${view === "queue" ? "on" : ""}`} onClick={() => setView("queue")}>Queue{queue.length ? ` (${queue.length})` : ""}</button>
           <button className={`tab ${view === "add" ? "on" : ""}`} onClick={() => setView("add")}>Add</button>
         </div>
@@ -616,6 +714,46 @@ function Audite() {
         </>
       )}
 
+      {/* ---------- SUGGESTED ---------- */}
+      {view === "suggested" && (() => {
+        const anyOptedIn = pods.some((p) => p.inSuggested);
+        const sugVisible = sugList.filter((it) => !positions[it.audioUrl]?.done);
+        if (!anyOptedIn) return (
+          <div className="empty">
+            <div className="big">Nothing suggested yet</div>
+            Mark shows as ‘Include in Suggested’ on their podcast page and their newest episodes will gather here.
+          </div>
+        );
+        return (
+          <>
+            <div style={{ display: "flex", gap: 8, padding: "4px 16px 12px" }}>
+              <button className="btn primary" style={{ flex: 1, padding: "12px" }} disabled={sugLoading || !sugVisible.length}
+                onClick={() => playItem(sugVisible[0], "suggested")}>
+                ▶ Play Suggested{sugVisible.length ? ` (${sugVisible.length})` : ""}
+              </button>
+              <button className="btn" disabled={sugLoading} onClick={buildSuggested}>↻ Refresh</button>
+            </div>
+            {sugLoading && <div className="msg">Gathering new episodes…</div>}
+            {!sugLoading && sugBuilt && sugVisible.length === 0 && (
+              <div className="empty"><div className="big">All caught up.</div></div>
+            )}
+            {!sugLoading && sugVisible.map((it) => (
+              <div className="row" key={it.audioUrl}>
+                {it.artwork ? <img src={it.artwork} alt="" /> : <div className="ph">♪</div>}
+                <div className="meta" onClick={() => playItem(it, "suggested")} style={{ cursor: "pointer" }}>
+                  <div className="t" style={current?.audioUrl === it.audioUrl ? { color: "var(--amber)" } : {}}>{it.epTitle}</div>
+                  <div className="s">
+                    {it.podTitle}{it.pubDate ? ` · ${fmtDate(it.pubDate)}` : ""}
+                    {savedPos(it.audioUrl) ? <> · <span className="resume-pill">{fmtTime(savedPos(it.audioUrl).sec)} in</span></> : ""}
+                  </div>
+                </div>
+                <button className="iconb" onClick={() => playItem(it, "suggested")}>▶</button>
+              </div>
+            ))}
+          </>
+        );
+      })()}
+
       {/* ---------- QUEUE ---------- */}
       {view === "queue" && (
         <>
@@ -683,6 +821,13 @@ function Audite() {
                 : <button className="btn small primary" disabled={addBusy} onClick={() => subscribe(r.feedUrl, true)}>Subscribe</button>}
             </div>
           ))}
+
+          <h2 style={{ marginTop: 22 }}>Backup</h2>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={exportBackup}>Export library</button>
+            <button className="btn" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Import backup</button>
+            <input ref={fileInputRef} type="file" accept="application/json,.json" style={{ display: "none" }} onChange={importBackup} />
+          </div>
         </div>
       )}
 
@@ -706,6 +851,8 @@ function Audite() {
                     <button className={`chip ${openPodMeta.showOnMain ? "on" : ""}`} style={{ fontSize: 12, padding: "6px 12px" }}
                       onClick={() => toggleShowOnMain(openPodMeta.id)}>Show on Home</button>
                   )}
+                  <button className={`chip ${openPodMeta.inSuggested ? "on" : ""}`} style={{ fontSize: 12, padding: "6px 12px" }}
+                    onClick={() => toggleInSuggested(openPodMeta.id)}>Include in Suggested</button>
                   <button className="btn small danger" onClick={() => { if (confirm("Remove this podcast from your library?")) unsubscribe(openPodMeta.id); }}>Unsubscribe</button>
                 </div>
               </div>
