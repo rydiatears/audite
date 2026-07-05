@@ -836,27 +836,32 @@ function Audite() {
         <>
           <button className="backlink" onClick={() => { setView("library"); setOpenPod(null); }}>← Library</button>
           {openPodMeta && (
-            <div className="row" style={{ borderBottom: "none" }}>
-              {openPodMeta.artwork ? <img src={openPodMeta.artwork} alt="" style={{ width: 76, height: 76, borderRadius: 14 }} /> : <div className="ph" style={{ width: 76, height: 76 }}>♪</div>}
-              <div className="meta">
-                <div className="t display" style={{ fontSize: 18, fontWeight: 600 }}>{openPodMeta.title}</div>
-                <div className="s">{openPodMeta.author}</div>
-                <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-                  <select className="input" style={{ padding: "6px 10px", fontSize: 12, width: "auto" }}
-                    value={openPodMeta.folderId || ""} onChange={(e) => setPodFolder(openPodMeta.id, e.target.value)}>
-                    <option value="">No folder</option>
-                    {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-                  </select>
-                  {openPodMeta.folderId && (
-                    <button className={`chip ${openPodMeta.showOnMain ? "on" : ""}`} style={{ fontSize: 12, padding: "6px 12px" }}
-                      onClick={() => toggleShowOnMain(openPodMeta.id)}>Show on Home</button>
-                  )}
-                  <button className={`chip ${openPodMeta.inSuggested ? "on" : ""}`} style={{ fontSize: 12, padding: "6px 12px" }}
-                    onClick={() => toggleInSuggested(openPodMeta.id)}>Include in Suggested</button>
-                  <button className="btn small danger" onClick={() => { if (confirm("Remove this podcast from your library?")) unsubscribe(openPodMeta.id); }}>Unsubscribe</button>
+            <>
+              <div className="row" style={{ borderBottom: "none" }}>
+                {openPodMeta.artwork ? <img src={openPodMeta.artwork} alt="" style={{ width: 76, height: 76, borderRadius: 14 }} /> : <div className="ph" style={{ width: 76, height: 76 }}>♪</div>}
+                <div className="meta">
+                  <div className="t display" style={{ fontSize: 18, fontWeight: 600 }}>{openPodMeta.title}</div>
+                  <div className="s">{openPodMeta.author}</div>
                 </div>
               </div>
-            </div>
+              {/* controls wrap below the artwork/title so nothing overflows on narrow phones */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "8px 16px 0" }}>
+                <select className="input" style={{ padding: "6px 10px", fontSize: 12, width: "auto" }}
+                  value={openPodMeta.folderId || ""} onChange={(e) => setPodFolder(openPodMeta.id, e.target.value)}>
+                  <option value="">No folder</option>
+                  {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+                {openPodMeta.folderId && (
+                  <button className={`chip ${openPodMeta.showOnMain ? "on" : ""}`} style={{ fontSize: 12, padding: "6px 12px" }}
+                    onClick={() => toggleShowOnMain(openPodMeta.id)}>Show on Home</button>
+                )}
+                <button className={`chip ${openPodMeta.inSuggested ? "on" : ""}`} style={{ fontSize: 12, padding: "6px 12px" }}
+                  onClick={() => toggleInSuggested(openPodMeta.id)}>Include in Suggested</button>
+              </div>
+              <div style={{ padding: "8px 16px 4px" }}>
+                <button className="btn small danger" onClick={() => { if (confirm("Remove this podcast from your library?")) unsubscribe(openPodMeta.id); }}>Unsubscribe</button>
+              </div>
+            </>
           )}
           {podLoading && <div className="msg">Loading episodes…</div>}
           {podError && <div className="msg err">{podError}</div>}
