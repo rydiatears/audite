@@ -41,20 +41,41 @@ async function sSet(key, value) {
 }
 
 // ---------- fetching & feed parsing ----------
+// Some hosting/analytics services wrap the real feed URL in a tracking
+// prefix (e.g. https://rss.pdrl.fm/3f8a3d/feeds.megaphone.fm/XYZ). If the
+// wrapper breaks, the embedded URL usually still works.
+function unwrapFeedUrl(url) {
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+\/.+)/i);
+    return m ? "https://" + m[1] : null;
+  } catch { return null; }
+}
+
 async function fetchText(url) {
   // try direct first, then fall through the proxy chain for CORS-blocked feeds
-  const attempts = [
-    url,
-    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-    PROXY(url),
-  ];
-  for (const attempt of attempts) {
-    try {
-      const r = await fetch(attempt);
-      if (!r.ok) continue;
-      const text = await r.text();
-      if (text) return text;
-    } catch {}
+  const chain = async (target) => {
+    const attempts = [
+      target,
+      `https://corsproxy.io/?url=${encodeURIComponent(target)}`,
+      PROXY(target),
+    ];
+    for (const attempt of attempts) {
+      try {
+        const r = await fetch(attempt);
+        if (!r.ok) continue;
+        const text = await r.text();
+        if (text) return text;
+      } catch {}
+    }
+    return null;
+  };
+  let text = await chain(url);
+  if (text) return { text, finalUrl: url };
+  const unwrapped = unwrapFeedUrl(url);
+  if (unwrapped && unwrapped !== url) {
+    text = await chain(unwrapped);
+    if (text) return { text, finalUrl: unwrapped };
   }
   throw new Error("Couldn't reach this feed — proxies may be rate-limited, try again in a minute.");
 }
@@ -298,9 +319,10 @@ function Audite() {
     setAddBusy(true); setAddMsg("");
     try {
       if (pods.some((p) => p.feedUrl === feedUrl)) { setAddMsg("Already in your library."); setAddBusy(false); return; }
-      const xml = await fetchText(feedUrl);
-      const feed = parseFeed(xml, feedUrl);
-      const entry = { id: uid(), title: feed.title, artwork: feed.artwork, feedUrl, folderId: null, author: feed.author };
+      const { text: xml, finalUrl } = await fetchText(feedUrl);
+      const feed = parseFeed(xml, finalUrl);
+      // if only the unwrapped URL worked, save that so refreshes skip the broken wrapper
+      const entry = { id: uid(), title: feed.title, artwork: feed.artwork, feedUrl: finalUrl, folderId: null, author: feed.author };
       const next = [...pods, entry];
       setPods(next); saveLibrary(next, folders);
       setAddMsg(`Added: ${feed.title}`);
@@ -344,7 +366,7 @@ function Audite() {
   const openPodcast = async (podMeta) => {
     setView("podcast"); setOpenPodMeta(podMeta); setOpenPod(null); setPodError(""); setPodLoading(true);
     try {
-      const xml = await fetchText(podMeta.feedUrl);
+      const { text: xml } = await fetchText(podMeta.feedUrl);
       const feed = parseFeed(xml, podMeta.feedUrl);
       setOpenPod(feed);
     } catch (e) {
@@ -378,7 +400,7 @@ function Audite() {
     setAddBusy(true); setSearchResults([]); setAddMsg("");
     const url = `https://itunes.apple.com/search?media=podcast&limit=12&term=${encodeURIComponent(searchInput.trim())}`;
     try {
-      const text = await fetchText(url);
+      const { text } = await fetchText(url);
       const data = JSON.parse(text);
       const results = (data.results || []).filter((r) => r.feedUrl).map((r) => ({
         title: r.collectionName, artwork: r.artworkUrl100, feedUrl: r.feedUrl, author: r.artistName,
