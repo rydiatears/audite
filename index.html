@@ -42,16 +42,21 @@ async function sSet(key, value) {
 
 // ---------- fetching & feed parsing ----------
 async function fetchText(url) {
-  // try direct first, fall back to proxy for CORS-blocked feeds
-  try {
-    const r = await fetch(url);
-    if (r.ok) return await r.text();
-    throw new Error("bad status");
-  } catch {
-    const r2 = await fetch(PROXY(url));
-    if (!r2.ok) throw new Error("Couldn't reach this feed, even through the proxy.");
-    return await r2.text();
+  // try direct first, then fall through the proxy chain for CORS-blocked feeds
+  const attempts = [
+    url,
+    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+    PROXY(url),
+  ];
+  for (const attempt of attempts) {
+    try {
+      const r = await fetch(attempt);
+      if (!r.ok) continue;
+      const text = await r.text();
+      if (text) return text;
+    } catch {}
   }
+  throw new Error("Couldn't reach this feed — proxies may be rate-limited, try again in a minute.");
 }
 
 function tagText(el, names) {

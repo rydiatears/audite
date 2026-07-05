@@ -1,4 +1,4 @@
-const CACHE = "audite-v3";
+const CACHE = "audite-v4";
 const SHELL = [
   "./",
   "./index.html",
