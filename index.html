@@ -27,7 +27,7 @@ const { useState, useEffect, useRef, useCallback } = React;
    ============================================================ */
 
 // keep in sync with the CACHE version in sw.js — bump both on every release
-const APP_VERSION = "v10";
+const APP_VERSION = "v11";
 
 const PROXY = (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
 
@@ -251,16 +251,30 @@ function Audite() {
       setPlaying(false);
       showToast("Tap play to start — the browser needs one tap.");
     });
-    // lock-screen / notification controls where supported
+    // lock-screen / notification / car controls where supported
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: item.epTitle, artist: item.podTitle,
         artwork: item.artwork ? [{ src: item.artwork, sizes: "512x512" }] : [],
       });
-      navigator.mediaSession.setActionHandler("play", () => { audioRef.current?.play(); setPlaying(true); });
-      navigator.mediaSession.setActionHandler("pause", () => { audioRef.current?.pause(); setPlaying(false); });
-      navigator.mediaSession.setActionHandler("seekbackward", () => skip(-10));
-      navigator.mediaSession.setActionHandler("seekforward", () => skip(30));
+      // not every browser supports every action — register what we can
+      const tryHandler = (action, fn) => {
+        try { navigator.mediaSession.setActionHandler(action, fn); } catch {}
+      };
+      tryHandler("play", () => { audioRef.current?.play(); setPlaying(true); });
+      tryHandler("pause", () => { audioRef.current?.pause(); setPlaying(false); });
+      tryHandler("seekbackward", (d) => skip(-(d?.seekOffset || 10)));
+      tryHandler("seekforward", (d) => skip(d?.seekOffset || 30));
+      // car interfaces (Android Auto / Bluetooth) often only expose
+      // prev/next track buttons — map them to skips like podcast apps do
+      tryHandler("previoustrack", () => skip(-10));
+      tryHandler("nexttrack", () => skip(30));
+      tryHandler("seekto", (d) => {
+        const el = audioRef.current;
+        if (!el || d.seekTime == null) return;
+        if (d.fastSeek && el.fastSeek) el.fastSeek(d.seekTime);
+        else el.currentTime = d.seekTime;
+      });
     }
   }, [speed]);
 
@@ -304,13 +318,27 @@ function Audite() {
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
+    // report progress to the lock screen / car so their scrubbers work
+    const syncPositionState = () => {
+      if (!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
+      if (!isFinite(a.duration) || !a.duration) return;
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: a.duration,
+          playbackRate: a.playbackRate,
+          position: Math.min(a.currentTime, a.duration),
+        });
+      } catch {}
+    };
     const onMeta = () => {
       setCurDur(a.duration || 0);
       setCurTime(a.currentTime);
+      syncPositionState();
     };
     const onTime = () => {
       setCurTime(a.currentTime);
       setCurDur(a.duration || 0);
+      syncPositionState();
       const now = Date.now();
       if (now - lastSaveRef.current > 10000 && currentRef.current) {
         lastSaveRef.current = now;
