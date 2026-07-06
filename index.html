@@ -27,7 +27,7 @@ const { useState, useEffect, useRef, useCallback } = React;
    ============================================================ */
 
 // keep in sync with the CACHE version in sw.js — bump both on every release
-const APP_VERSION = "v9";
+const APP_VERSION = "v10";
 
 const PROXY = (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
 
@@ -299,10 +299,15 @@ function Audite() {
   const onSignalDown = (e) => { e.currentTarget.setPointerCapture(e.pointerId); signalSeek(e); };
   const onSignalMove = (e) => { if (e.buttons) signalSeek(e); };
 
-  // audio element events
+  // audio element events — must re-run after `loaded` flips: the pre-load
+  // render has no <audio> in the tree, so audioRef is null on first mount
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
+    const onMeta = () => {
+      setCurDur(a.duration || 0);
+      setCurTime(a.currentTime);
+    };
     const onTime = () => {
       setCurTime(a.currentTime);
       setCurDur(a.duration || 0);
@@ -341,10 +346,11 @@ function Audite() {
         setPlaying(false);
       }
     };
+    a.addEventListener("loadedmetadata", onMeta);
     a.addEventListener("timeupdate", onTime);
     a.addEventListener("ended", onEnded);
-    return () => { a.removeEventListener("timeupdate", onTime); a.removeEventListener("ended", onEnded); };
-  }, [savePosition, saveQueue, playItem]);
+    return () => { a.removeEventListener("loadedmetadata", onMeta); a.removeEventListener("timeupdate", onTime); a.removeEventListener("ended", onEnded); };
+  }, [loaded, savePosition, saveQueue, playItem]);
 
   // ---------- subscribe / library ----------
   const subscribe = async (feedUrl, fromSearch) => {
