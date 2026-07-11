@@ -27,7 +27,7 @@ const { useState, useEffect, useRef, useCallback } = React;
    ============================================================ */
 
 // keep in sync with the CACHE version in sw.js — bump both on every release
-const APP_VERSION = "v11";
+const APP_VERSION = "v12";
 
 const PROXY = (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
 
@@ -360,17 +360,16 @@ function Audite() {
         setPlaying(false);
         return;
       }
-      // advance through the queue
-      let nextIdx = 0;
+      // advance through the queue — never wrap backward from the tail
       const curIdx = q.findIndex((it) => it.audioUrl === cur?.audioUrl);
-      let newQ = q;
-      if (curIdx >= 0) { newQ = q.filter((_, i) => i !== curIdx); nextIdx = curIdx; }
-      if (newQ.length > 0) {
-        const next = newQ[Math.min(nextIdx, newQ.length - 1)];
+      if (curIdx >= 0) {
+        const newQ = q.filter((_, i) => i !== curIdx);
         saveQueue(newQ);
-        playItem(next);
+        if (curIdx < newQ.length) playItem(newQ[curIdx]);
+        else setPlaying(false); // finished the last queued episode — stop
+      } else if (q.length > 0) {
+        playItem(q[0]); // ad-hoc episode finished: start the queue
       } else {
-        if (newQ !== q) saveQueue(newQ);
         setPlaying(false);
       }
     };

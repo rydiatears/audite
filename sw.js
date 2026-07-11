@@ -1,4 +1,4 @@
-const CACHE = "audite-v11";
+const CACHE = "audite-v12";
 const SHELL = [
   "./",
   "./index.html",
@@ -24,7 +24,13 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      Promise.all(
+        keys
+          // Cache Storage is origin-wide: only touch our own audite-* caches
+          // so other apps hosted on this origin are left alone
+          .filter((k) => k.startsWith("audite-") && k !== CACHE)
+          .map((k) => caches.delete(k))
+      )
     )
   );
   self.clients.claim();
